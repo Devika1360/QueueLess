@@ -1,0 +1,457 @@
+# QueueLess — Technical Walkthrough
+
+This document walks through the entire application, explaining **how every piece works** technically, how data flows, and how each file connects to the others.
+
+---
+
+## 1. Application Startup & Provider Architecture
+
+Everything starts at [main.jsx](file:///d:/Honors%20Project/src/main.jsx), which mounts the `<App />` component into the DOM:
+
+```jsx
+createRoot(document.getElementById('root')).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+)
+```
+
+Then [App.jsx](file:///d:/Honors%20Project/src/App.jsx) sets up the **provider tree** — this is the backbone of the entire app:
+
+```
+<BrowserRouter>          ← React Router: enables URL-based navigation
+  <AuthProvider>         ← Provides login state to every component
+    <QueueProvider>      ← Provides queue state to every component
+      <Navbar />         ← Always rendered (hides itself on landing page)
+      <Routes>           ← Decides which page to show based on URL
+        /       → LandingPage
+        /user   → ProtectedRoute → UserDashboard
+        /admin  → AdminRoute → StaffDashboard
+      </Routes>
+    </QueueProvider>
+  </AuthProvider>
+</BrowserRouter>
+```
+
+> [!IMPORTANT]
+> The nesting order matters. `AuthProvider` wraps `QueueProvider` because queue operations need to know who the user is. Both wrap `<Routes>` so every page has access to auth and queue data via React Context.
+
+---
+
+## 2. Mock Data Layer
+
+[mockData.js](file:///d:/Honors%20Project/src/services/mockData.js) is the **"database"** of the app — pure hardcoded data, no backend:
+
+```js
+// Two hardcoded users with roles
+export const USERS = [
+  { id: 'admin-1', email: 'admin@queueless.com', password: 'admin123', role: 'admin' },
+  { id: 'user-1',  email: 'user@queueless.com',  password: 'user123',  role: 'customer' },
+];
+
+// 5 people already in the queue when the app loads
+export const INITIAL_QUEUE = [
+  { id: 'q1', name: 'Alice Johnson', email: 'alice@example.com', joinedAt: '10:00 AM' },
+  // ... 4 more
+];
+
+// Fixed constant: each person takes ~5 minutes
+export const AVG_SERVICE_TIME = 5;
+```
+
+**Why this works:** Since there's no backend, all data lives in JavaScript memory. When you refresh the page, the queue resets to its initial state.
+
+---
+
+## 3. Authentication Flow
+
+### How Login Works (Step by Step)
+
+```mermaid
+sequenceDiagram
+    participant U as User (Browser)
+    participant LP as LandingPage
+    participant AC as AuthContext
+    participant AS as authService
+    participant MD as mockData
+    participant LS as localStorage
+
+    U->>LP: Types email + password, clicks Sign In
+    LP->>AC: Calls login(email, password)
+    AC->>AS: Calls authenticateUser(email, password)
+    AS->>MD: Searches USERS array for matching email + password
+    MD-->>AS: Returns user object or null
+    AS-->>AC: Returns safe user (without password) or null
+    AC->>AC: Sets user state via setUser()
+    AC->>LS: useEffect saves user to localStorage
+    AC-->>LP: Returns { success: true, user } or { success: false, message }
+    LP->>U: Navigates to /admin or /user based on role
+```
+
+### AuthContext — The Brain of Authentication
+
+[AuthContext.jsx](file:///d:/Honors%20Project/src/context/AuthContext.jsx) uses React's **Context API** with three key pieces:
+
+#### a) State Initialization with localStorage
+
+```js
+const [user, setUser] = useState(() => {
+  const stored = localStorage.getItem('queueless_user');
+  return stored ? JSON.parse(stored) : null;
+});
+```
+
+This is a **lazy initializer** — the function runs only once on first render. It checks localStorage for a saved session, so if you refresh the page, you stay logged in.
+
+#### b) Syncing State ↔ localStorage
+
+```js
+useEffect(() => {
+  if (user) localStorage.setItem('queueless_user', JSON.stringify(user));
+  else      localStorage.removeItem('queueless_user');
+}, [user]);
+```
+
+The `useEffect` runs every time `user` changes. When you log in → saves to localStorage. When you log out (user becomes `null`) → removes from localStorage.
+
+#### c) The login() Function
+
+```js
+function login(email, password) {
+  const found = authenticateUser(email, password);  // from authService.js
+  if (found) { setUser(found); return { success: true, user: found }; }
+  return { success: false, message: 'Invalid email or password' };
+}
+```
+
+It calls [authService.js](file:///d:/Honors%20Project/src/services/authService.js) which does a simple `.find()` on the hardcoded users array. The password is stripped from the returned object using destructuring:
+
+```js
+const { password: _, ...safeUser } = user;  // _ is discarded
+```
+
+#### d) The useAuth() Hook
+
+```js
+export function useAuth() {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
+  return ctx;
+}
+```
+
+Any component can call `const { user, login, logout } = useAuth()` to access: the current user object, the login function, and the logout function. The error guard ensures you don't accidentally use it outside the provider.
+
+---
+
+## 4. Route Protection
+
+Two wrapper components act as **gatekeepers**:
+
+### ProtectedRoute — [ProtectedRoute.jsx](file:///d:/Honors%20Project/src/routes/ProtectedRoute.jsx)
+
+```js
+function ProtectedRoute({ children }) {
+  const { user } = useAuth();
+  if (!user) return <Navigate to="/" replace />;   // Not logged in → go to login
+  return children;                                  // Logged in → show the page
+}
+```
+
+### AdminRoute — [AdminRoute.jsx](file:///d:/Honors%20Project/src/routes/AdminRoute.jsx)
+
+```js
+function AdminRoute({ children }) {
+  const { user } = useAuth();
+  if (!user) return <Navigate to="/" replace />;           // Not logged in → login
+  if (user.role !== 'admin') return <Navigate to="/user" replace />;  // Not admin → user dashboard
+  return children;                                         // Is admin → show admin page
+}
+```
+
+**How they're used in App.jsx:**
+
+```jsx
+<Route path="/user" element={
+  <ProtectedRoute>       {/* ← Guard: must be logged in */}
+    <UserDashboard />
+  </ProtectedRoute>
+} />
+
+<Route path="/admin" element={
+  <AdminRoute>           {/* ← Guard: must be logged in + admin role */}
+    <StaffDashboard />
+  </AdminRoute>
+} />
+```
+
+> [!TIP]
+> `<Navigate replace />` uses `replace` so the guarded URL doesn't appear in browser history — pressing "Back" won't take you to a page you can't access.
+
+---
+
+## 5. Queue Logic — The Core Engine
+
+### QueueContext — [QueueContext.jsx](file:///d:/Honors%20Project/src/context/QueueContext.jsx)
+
+This is the **most important file**. The entire queue system is just **two state variables**:
+
+```js
+const [queue, setQueue] = useState([...INITIAL_QUEUE]);    // Array of people
+const [currentServingIndex, setCurrentServingIndex] = useState(0);  // Who's being served
+```
+
+**Visual representation:**
+
+```
+queue = [ Alice, Bob, Carol, David, Eva ]
+              ↑
+        currentServingIndex = 0  →  Alice is being served
+```
+
+### The Three Actions
+
+```mermaid
+flowchart LR
+    A["Admin clicks<br/>Next Customer"] --> B["currentServingIndex++"]
+    C["Admin clicks<br/>Skip Customer"] --> B
+    D["Customer clicks<br/>Join Queue"] --> E["queue.push(newEntry)"]
+
+    style A fill:#10b981,color:#fff
+    style C fill:#ef4444,color:#fff
+    style D fill:#6366f1,color:#fff
+```
+
+#### nextCustomer() and skipCustomer()
+
+```js
+function nextCustomer() {
+  if (currentServingIndex < queue.length - 1) {   // Guard: don't go past the end
+    setCurrentServingIndex((prev) => prev + 1);
+  }
+}
+```
+
+Both do the same thing: **increment the index by 1**. The queue array itself never changes — only the pointer moves forward. This is what makes it "admin-controlled" — there's no timer, no interval, no automatic advancement.
+
+**Example flow:**
+
+| Admin Action | currentServingIndex | Now Serving |
+|-------------|-------------------|------------|
+| *(initial)* | 0 | Alice |
+| Next Customer | 1 | Bob |
+| Skip Customer | 2 | Carol |
+| Next Customer | 3 | David |
+| Next Customer | 4 | Eva |
+| Next Customer | 4 (no change) | Eva (guard prevents overflow) |
+
+#### joinQueue()
+
+```js
+function joinQueue(name, email) {
+  const newEntry = {
+    id: `q-${Date.now()}`,      // Unique ID using timestamp
+    name,
+    email,
+    joinedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+  };
+  setQueue((prev) => [...prev, newEntry]);  // Append to end of queue
+  return newEntry;                          // Return so the caller knows the ID
+}
+```
+
+This appends a new person to the end of the `queue` array. The `id` uses `Date.now()` to ensure uniqueness.
+
+---
+
+## 6. Queue Helpers — Status & ETA
+
+[queueHelpers.js](file:///d:/Honors%20Project/src/utils/queueHelpers.js) has two pure functions (no side effects):
+
+### calculateETA()
+
+```js
+function calculateETA(peopleAhead) {
+  return peopleAhead * AVG_SERVICE_TIME;   // peopleAhead × 5 minutes
+}
+```
+
+**Example:** If you're at index 4 and currentServingIndex is 1, then `peopleAhead = 4 - 1 = 3`, so `ETA = 3 × 5 = 15 minutes`.
+
+### getStatus()
+
+```js
+function getStatus(customerIndex, currentServingIndex) {
+  if (customerIndex < currentServingIndex)     return 'Completed';
+  if (customerIndex === currentServingIndex)    return 'Now Serving';
+  if (customerIndex === currentServingIndex + 1) return 'Almost There';
+  return 'Waiting';
+}
+```
+
+**Visual:**
+
+```
+queue = [ Alice, Bob, Carol, David, Eva ]
+           ↑        ↑       ↑
+        Completed  Now    Almost    Waiting   Waiting
+                  Serving  There
+                     │
+           currentServingIndex = 1 (Bob is being served)
+```
+
+---
+
+## 7. Pages — What the User Sees
+
+### Landing Page — [LandingPage.jsx](file:///d:/Honors%20Project/src/pages/LandingPage.jsx)
+
+**Key behaviors:**
+
+1. **Auto-redirect:** If already logged in, immediately navigates to `/admin` or `/user`
+2. **Form submission:** Calls `login()` from AuthContext, shows error or redirects
+3. **Quick-fill buttons:** Pre-populate email/password fields (don't submit — user still clicks Sign In)
+4. **Loading state:** 400ms fake delay with spinner for UX polish
+
+```mermaid
+flowchart TD
+    A[LandingPage renders] --> B{user already<br/>logged in?}
+    B -->|Yes| C[Navigate to /admin or /user]
+    B -->|No| D[Show login form]
+    D --> E[User submits form]
+    E --> F[Call login from AuthContext]
+    F --> G{Credentials valid?}
+    G -->|Yes| H[Navigate to dashboard]
+    G -->|No| I[Show error message]
+```
+
+### User Dashboard — [UserDashboard.jsx](file:///d:/Honors%20Project/src/pages/UserDashboard.jsx)
+
+**Two states** controlled by `hasJoined`:
+
+| hasJoined | What's shown |
+|-----------|-------------|
+| `false` | "Join Queue" button + current queue count |
+| `true` | Stats cards + status banner + queue list |
+
+**How position is derived (on every render):**
+
+```js
+const myIndex = queue.findIndex((q) => q.id === myQueueId);     // Where am I in the array?
+const peopleAhead = Math.max(0, myIndex - currentServingIndex);  // How many before me?
+const myStatus = getStatus(myIndex, currentServingIndex);        // What's my status label?
+const eta = calculateETA(peopleAhead);                           // How long will I wait?
+```
+
+> [!NOTE]
+> These values **re-compute automatically** whenever `queue` or `currentServingIndex` change in the QueueContext. This is because the component calls `useQueue()` which subscribes to context changes — React re-renders the component whenever the context value updates.
+
+### Staff Dashboard — [StaffDashboard.jsx](file:///d:/Honors%20Project/src/pages/StaffDashboard.jsx)
+
+**Derived values:**
+
+```js
+const currentPerson = queue[currentServingIndex];               // Who's being served now?
+const served = currentServingIndex;                              // How many completed?
+const remaining = Math.max(0, totalInQueue - currentServingIndex - 1); // How many left?
+const allDone = currentServingIndex >= totalInQueue;             // Everyone served?
+```
+
+**Action buttons** directly call context functions:
+
+```jsx
+<button onClick={nextCustomer}>✓ Next Customer</button>    // → index++
+<button onClick={skipCustomer}>⏭ Skip Customer</button>    // → index++
+```
+
+When admin clicks either button → `currentServingIndex` increments → React re-renders both the StaffDashboard AND any UserDashboard that's open (they share the same QueueContext).
+
+---
+
+## 8. Shared Components
+
+### QueueCard — [QueueCard.jsx](file:///d:/Honors%20Project/src/components/QueueCard.jsx)
+
+Receives `person`, `index`, and `currentServingIndex` as props. Internally calls `getStatus()` to determine the status label and applies different styles:
+
+| Status | Style |
+|--------|-------|
+| Completed | Green pill, dim card |
+| Now Serving | Indigo pill with pulse animation, glowing border, scaled up |
+| Almost There | Amber pill |
+| Waiting | Gray pill |
+
+### StatCard — [StatCard.jsx](file:///d:/Honors%20Project/src/components/StatCard.jsx)
+
+A pure presentational component. Takes `icon`, `label`, `value`, and `accent` color. Renders a gradient-bordered card. Accepts `accent` as one of: `indigo`, `cyan`, `emerald`, `amber`.
+
+### Navbar — [Navbar.jsx](file:///d:/Honors%20Project/src/components/Navbar.jsx)
+
+- Hides itself on the landing page (`if (location.pathname === '/') return null`)
+- Shows user avatar (first letter), name, role, and logout button
+- Calls `logout()` from AuthContext and navigates to `/` on logout
+
+---
+
+## 9. Data Flow Diagram — Full Picture
+
+```mermaid
+flowchart TB
+    subgraph "Mock Data Layer"
+        MD[mockData.js<br/>USERS, INITIAL_QUEUE, AVG_SERVICE_TIME]
+    end
+
+    subgraph "Service Layer"
+        AS[authService.js<br/>authenticateUser]
+    end
+
+    subgraph "Utility Layer"
+        QH[queueHelpers.js<br/>calculateETA, getStatus]
+    end
+
+    subgraph "Context Layer (Global State)"
+        AC[AuthContext<br/>user, login, logout]
+        QC[QueueContext<br/>queue, currentServingIndex<br/>nextCustomer, skipCustomer, joinQueue]
+    end
+
+    subgraph "Route Guards"
+        PR[ProtectedRoute<br/>checks user !== null]
+        AR[AdminRoute<br/>checks role === admin]
+    end
+
+    subgraph "Pages"
+        LP[LandingPage<br/>Login form]
+        UD[UserDashboard<br/>Join + view status]
+        SD[StaffDashboard<br/>Next + Skip controls]
+    end
+
+    MD --> AS
+    MD --> QC
+    MD --> QH
+    AS --> AC
+    AC --> PR
+    AC --> AR
+    AC --> LP
+    QC --> UD
+    QC --> SD
+    QH --> UD
+    QH --> SD
+    PR --> UD
+    AR --> SD
+```
+
+---
+
+## 10. Key React Patterns Used
+
+| Pattern | Where | Why |
+|---------|-------|-----|
+| **Context API** | AuthContext, QueueContext | Share state across components without prop drilling |
+| **Custom Hooks** | `useAuth()`, `useQueue()`, `useQueuePosition()` | Clean abstraction over context consumption |
+| **Lazy State Init** | `useState(() => ...)` in AuthContext | Read localStorage only once on mount, not on every render |
+| **Derived State** | StaffDashboard, UserDashboard | `served`, `remaining`, `eta` are computed from `queue` + `currentServingIndex` — not stored separately |
+| **Conditional Rendering** | UserDashboard (`hasJoined`), StaffDashboard (`allDone`) | Show different UI based on state |
+| **Wrapper Components** | ProtectedRoute, AdminRoute | Declarative route protection via composition |
+
+> [!TIP]
+> Notice that `served`, `remaining`, `eta`, and `status` are all **derived values** — they're computed from `queue` and `currentServingIndex` on every render. They are NOT stored in state. This avoids bugs where you'd have to keep multiple state variables in sync.

@@ -1,0 +1,201 @@
+================================================================================
+         QueueLess — Team Contribution & Work Division
+         Smart Virtual Queue Management System
+================================================================================
+
+
+TEAM MEMBER 1 — Project Setup, Routing & Authentication
+--------------------------------------------------------------------------------
+
+Role: Project Architect & Authentication Lead
+
+Files Worked On:
+  - src/main.jsx                    (Application entry point)
+  - src/App.jsx                     (Root component, routing setup)
+  - src/context/AuthContext.jsx      (Authentication state management)
+  - src/services/authService.js      (Login credential verification)
+  - src/services/mockData.js         (Hardcoded users & mock data)
+  - src/routes/ProtectedRoute.jsx    (Route guard for logged-in users)
+  - src/routes/AdminRoute.jsx        (Route guard for admin-only access)
+  - vite.config.js                   (Build tool configuration)
+  - index.html                       (HTML template & meta tags)
+
+Contribution Summary:
+  - Set up the React + Vite project with Tailwind CSS configuration
+  - Designed the application architecture and provider nesting order
+    (BrowserRouter → AuthProvider → QueueProvider → Routes)
+  - Built the AuthContext using React Context API with localStorage
+    persistence so login survives page refresh
+  - Created the authService that matches credentials against hardcoded
+    users and returns safe user objects (password stripped)
+  - Implemented role-based route protection:
+      * ProtectedRoute — blocks unauthenticated users, redirects to "/"
+      * AdminRoute — blocks non-admin users, redirects to "/user"
+  - Defined all mock data: user credentials, initial queue entries,
+    and the AVG_SERVICE_TIME constant
+  - Configured React Router with three routes: "/", "/user", "/admin"
+
+Key Technical Decisions:
+  - Used lazy state initialization in useState() to read localStorage
+    only once on mount instead of every render
+  - Used useEffect to sync auth state bidirectionally with localStorage
+  - Used <Navigate replace /> to prevent guarded URLs from appearing
+    in browser history
+
+
+================================================================================
+
+TEAM MEMBER 2 — Queue Logic & State Management
+--------------------------------------------------------------------------------
+
+Role: Core Logic & Backend Simulation Lead
+
+Files Worked On:
+  - src/context/QueueContext.jsx      (Queue state management — the core engine)
+  - src/utils/queueHelpers.js         (ETA calculation & status derivation)
+  - src/hooks/useQueuePosition.js     (Custom hook for queue position data)
+
+Contribution Summary:
+  - Built the QueueContext — the central engine of the entire application
+    using React Context API with two state variables:
+      * queue[] — array of people in the queue
+      * currentServingIndex — integer pointer to who's being served
+  - Implemented the three queue actions:
+      * nextCustomer() — increments currentServingIndex by 1 (with guard)
+      * skipCustomer() — increments currentServingIndex by 1 (with guard)
+      * joinQueue(name, email) — appends a new entry to the queue array
+  - Ensured the queue is strictly admin-controlled (event-driven):
+      * NO timers, NO intervals, NO automatic advancement
+      * Queue moves ONLY when admin clicks Next or Skip
+  - Created the calculateETA() utility function:
+      * Formula: ETA = peopleAhead × AVG_SERVICE_TIME (5 minutes)
+  - Created the getStatus() utility function that derives status labels:
+      * "Completed"    — customer index < currentServingIndex
+      * "Now Serving"  — customer index === currentServingIndex
+      * "Almost There" — customer index === currentServingIndex + 1
+      * "Waiting"      — all others
+  - Built the useQueuePosition() custom hook that combines queue context
+    data with helper functions for easy consumption by components
+
+Key Technical Decisions:
+  - Queue state uses a pointer-based approach (index moves, array stays)
+    instead of mutating/removing array elements — simpler and less error-prone
+  - All stats (served, remaining, eta, status) are derived values computed
+    on every render, NOT stored in separate state — avoids sync bugs
+  - Used functional state updates: setCurrentServingIndex((prev) => prev + 1)
+    to avoid stale closure issues
+
+
+================================================================================
+
+TEAM MEMBER 3 — Staff Dashboard & Admin Interface
+--------------------------------------------------------------------------------
+
+Role: Admin Panel & Queue Control UI Lead
+
+Files Worked On:
+  - src/pages/StaffDashboard.jsx      (Admin dashboard page)
+  - src/pages/LandingPage.jsx         (Login / landing page)
+  - src/components/Navbar.jsx          (Navigation bar component)
+
+Contribution Summary:
+  - Built the Staff Dashboard — the admin's main control panel:
+      * "Now Serving" section showing the current customer's name,
+        email, and join time with an avatar badge
+      * "Next Customer" button (green) — calls nextCustomer() from context
+      * "Skip Customer" button (red) — calls skipCustomer() from context
+      * Stats row showing: Total, Served, Remaining, Current Position
+      * Full queue list using QueueCard components
+      * "All done!" celebration state when every customer is served
+  - Built the Landing Page with login functionality:
+      * Email and password form with validation
+      * Quick-fill demo buttons ("Admin Login" / "User Login") that
+        pre-populate credentials for easy testing
+      * Role-based redirect after login (admin → /admin, customer → /user)
+      * Auto-redirect if already logged in
+      * Loading spinner with 400ms artificial delay for UX polish
+      * Error message display for invalid credentials
+  - Built the Navbar component:
+      * Sticky glassmorphism navigation bar
+      * Shows user avatar (first letter), name, and role
+      * Logout button that clears auth state and redirects to "/"
+      * Self-hiding on the landing page (no navbar on login screen)
+
+Key Technical Decisions:
+  - Staff Dashboard derives all display values (served, remaining, allDone)
+    from queue context on every render — no local state duplication
+  - Landing page uses async handleSubmit with artificial delay to show
+    loading state, making UX feel more realistic
+  - Navbar checks location.pathname to conditionally hide itself
+
+
+================================================================================
+
+TEAM MEMBER 4 — User Dashboard & Reusable UI Components
+--------------------------------------------------------------------------------
+
+Role: Customer Interface & Component Design Lead
+
+Files Worked On:
+  - src/pages/UserDashboard.jsx        (Customer dashboard page)
+  - src/components/QueueCard.jsx        (Queue entry display card)
+  - src/components/StatCard.jsx         (Statistics display card)
+  - src/index.css                       (Global styles, Tailwind config)
+  - public/favicon.svg                  (App icon)
+
+Contribution Summary:
+  - Built the User Dashboard — the customer's view:
+      * "Join Queue" call-to-action with current queue count
+      * After joining: three stat cards showing Position, People Ahead,
+        and Estimated Wait Time
+      * Dynamic status banner that changes based on queue status:
+        - "Hang tight" (Waiting) with hourglass icon
+        - "Get ready — you're next!" (Almost There) with lightning icon
+        - "It's your turn!" (Now Serving) with celebration icon
+        - "You have been served" (Completed) with checkmark icon
+      * Full queue overview showing all entries with their statuses
+  - Built the QueueCard component:
+      * Displays position number, person name, join time, and status pill
+      * Status-aware styling: active card gets glowing border, scale-up
+        effect, and gradient position badge
+      * Status pills with color-coded backgrounds:
+        Completed (green), Now Serving (indigo + pulse), Almost There
+        (amber), Waiting (gray)
+  - Built the StatCard component:
+      * Reusable card with icon, label, large value display
+      * Four accent color themes: indigo, cyan, emerald, amber
+      * Gradient background with hover scale animation
+  - Designed the complete UI/UX:
+      * Created the global CSS with custom Tailwind utilities:
+        glass, glass-card, gradient-primary/accent/success/warning/danger,
+        text-gradient, animate-float, animate-pulse-slow
+      * Implemented dark theme (bg-gray-950 base)
+      * Added glassmorphism effects (backdrop-blur + semi-transparent borders)
+      * Added floating background orbs with CSS animation
+      * Integrated Google Fonts (Inter) for modern typography
+      * Designed the branded SVG favicon
+      * Ensured responsive design across mobile and desktop
+
+Key Technical Decisions:
+  - QueueCard uses getStatus() internally to derive display state from
+    props rather than receiving a pre-computed status
+  - StatCard keeps accent color mapping as a local object for clean,
+    self-contained component logic
+  - CSS uses @layer utilities for custom Tailwind-compatible classes
+  - Used CSS custom properties and Tailwind opacity modifiers (e.g.,
+    bg-indigo-500/10) for consistent transparency effects
+
+
+================================================================================
+
+SUMMARY TABLE
+================================================================================
+
+  Member   | Focus Area                  | Files Count | Key Deliverable
+  ---------|-----------------------------|-------------|---------------------------
+  Member 1 | Setup, Auth & Routing       |     9       | Authentication system
+  Member 2 | Queue Logic & State         |     3       | Queue engine (Context)
+  Member 3 | Admin UI & Landing Page     |     3       | Staff Dashboard
+  Member 4 | Customer UI & Components    |     5       | User Dashboard + UI Design
+
+================================================================================

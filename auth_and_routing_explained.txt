@@ -1,0 +1,1042 @@
+================================================================================
+  AUTHENTICATION & ROUTING — DEEP DIVE EXPLANATION
+  QueueLess: Smart Virtual Queue Management System
+  Prepared for: Team Member responsible for Auth & Routing
+================================================================================
+
+
+TABLE OF CONTENTS
+-----------------
+1. Big Picture — What Are We Solving?
+2. Files You Own (and what each one does)
+3. FILE 1: mockData.js — The Fake Database
+4. FILE 2: authService.js — The Credential Checker
+5. FILE 3: AuthContext.jsx — The Brain of Authentication
+6. FILE 4: ProtectedRoute.jsx — Guard for Logged-In Users
+7. FILE 5: AdminRoute.jsx — Guard for Admin-Only Pages
+8. FILE 6: App.jsx — Where Routing is Defined
+9. FILE 7: LandingPage.jsx — The Login Screen
+10. FILE 8: Navbar.jsx — The Logout Button
+11. Complete Login Flow (Step by Step)
+12. Complete Logout Flow (Step by Step)
+13. Complete Route Protection Flow
+14. React Concepts Used (explained simply)
+15. Likely Cross Questions & Answers
+16. Common Modifications You Might Be Asked to Make
+
+
+================================================================================
+1. BIG PICTURE — WHAT ARE WE SOLVING?
+================================================================================
+
+Our app has two types of users:
+  - Admin (staff who manages the queue)
+  - Customer (user who joins the queue)
+
+We need to solve 3 problems:
+
+  PROBLEM 1: AUTHENTICATION
+    "How does the app know WHO is using it?"
+    → We check their email and password against a hardcoded list.
+    → If it matches, we store their info in React state AND localStorage.
+    → Every component in the app can then check: "Is someone logged in?
+      Who are they? What role do they have?"
+
+  PROBLEM 2: ROUTING
+    "How do we show different pages for different URLs?"
+    → We use React Router. When URL is "/", show login page.
+      When URL is "/user", show customer dashboard.
+      When URL is "/admin", show staff dashboard.
+
+  PROBLEM 3: ROUTE PROTECTION
+    "How do we stop unauthorized people from accessing pages?"
+    → We wrap pages in guard components.
+    → ProtectedRoute checks: "Are you logged in?" If no → kick to login.
+    → AdminRoute checks: "Are you logged in AND an admin?" If no → kick out.
+
+We do NOT use a real backend. No server, no database, no JWT tokens.
+Everything is in the browser's memory + localStorage.
+
+
+================================================================================
+2. FILES YOU OWN
+================================================================================
+
+These are YOUR files — you should know every line:
+
+  src/services/mockData.js        → Fake database (hardcoded users)
+  src/services/authService.js     → Credential checking function
+  src/context/AuthContext.jsx     → Global auth state (the heart of auth)
+  src/routes/ProtectedRoute.jsx   → Route guard: must be logged in
+  src/routes/AdminRoute.jsx       → Route guard: must be admin
+  src/App.jsx                     → Route definitions & provider setup
+  src/pages/LandingPage.jsx       → Login form UI (you handle the logic part)
+  src/components/Navbar.jsx       → Logout button (you handle the logic part)
+
+
+================================================================================
+3. FILE 1: mockData.js — THE FAKE DATABASE
+================================================================================
+
+FILE PATH: src/services/mockData.js
+
+PURPOSE:
+  This file acts as our "database". Since we have no backend server,
+  we hardcode all user credentials directly in JavaScript. When the app
+  starts, these values are loaded into memory.
+
+FULL CODE:
+  ┌──────────────────────────────────────────────────────────┐
+  │ export const USERS = [                                   │
+  │   {                                                      │
+  │     id: 'admin-1',                                       │
+  │     email: 'admin@queueless.com',                        │
+  │     password: 'admin123',                                │
+  │     name: 'Admin Staff',                                 │
+  │     role: 'admin',                                       │
+  │   },                                                     │
+  │   {                                                      │
+  │     id: 'user-1',                                        │
+  │     email: 'user@queueless.com',                         │
+  │     password: 'user123',                                 │
+  │     name: 'John Doe',                                    │
+  │     role: 'customer',                                    │
+  │   },                                                     │
+  │ ];                                                       │
+  └──────────────────────────────────────────────────────────┘
+
+LINE-BY-LINE EXPLANATION:
+
+  "export const USERS = [...]"
+    - "export" means other files can import this variable.
+    - "const" means the variable itself can't be reassigned.
+    - USERS is an ARRAY of user OBJECTS.
+
+  Each user object has 5 properties:
+    - id       → unique identifier for the user
+    - email    → used for login (like a username)
+    - password → plain text password (no hashing — this is a demo)
+    - name     → display name shown in the UI
+    - role     → either "admin" or "customer"
+                 THIS IS THE MOST IMPORTANT FIELD.
+                 The entire routing system depends on this value.
+
+WHY ONLY TWO USERS?
+  This is an academic demo project. In a real app, users would be
+  stored in a database and passwords would be hashed. Here we just
+  need one admin and one customer to demonstrate the system.
+
+HOW TO ADD A NEW USER:
+  Just add another object to the array:
+    {
+      id: 'user-2',
+      email: 'jane@queueless.com',
+      password: 'jane123',
+      name: 'Jane Smith',
+      role: 'customer',
+    }
+
+
+================================================================================
+4. FILE 2: authService.js — THE CREDENTIAL CHECKER
+================================================================================
+
+FILE PATH: src/services/authService.js
+
+PURPOSE:
+  This file has ONE function: authenticateUser().
+  It takes an email and password, checks if they match any user
+  in our fake database, and returns the user info OR null.
+
+FULL CODE:
+  ┌──────────────────────────────────────────────────────────┐
+  │ import { USERS } from './mockData';                      │
+  │                                                          │
+  │ export function authenticateUser(email, password) {      │
+  │   const user = USERS.find(                               │
+  │     (u) => u.email === email && u.password === password   │
+  │   );                                                     │
+  │   if (!user) return null;                                │
+  │   const { password: _, ...safeUser } = user;             │
+  │   return safeUser;                                       │
+  │ }                                                        │
+  └──────────────────────────────────────────────────────────┘
+
+LINE-BY-LINE EXPLANATION:
+
+  Line: import { USERS } from './mockData';
+    → Imports the hardcoded users array from mockData.js.
+    → The { } means we're importing a NAMED export (not default).
+
+  Line: export function authenticateUser(email, password) {
+    → Defines a function that takes email and password as inputs.
+    → "export" so AuthContext.jsx can import and use it.
+
+  Line: const user = USERS.find((u) => u.email === email && u.password === password);
+    → .find() searches through the USERS array.
+    → For each user "u", it checks:
+        Does u.email exactly match the typed email?  AND
+        Does u.password exactly match the typed password?
+    → If BOTH match → returns that user object.
+    → If NO match found → returns undefined.
+
+  Line: if (!user) return null;
+    → If find() returned undefined (no match), we return null.
+    → null means "authentication failed".
+
+  Line: const { password: _, ...safeUser } = user;
+    → This is DESTRUCTURING with RENAMING and REST syntax.
+    → Breaking it down:
+        { password: _ }  → Take the "password" property out and rename
+                           it to "_" (underscore is convention for
+                           "I don't need this variable")
+        ...safeUser      → Put ALL REMAINING properties into a new
+                           object called "safeUser"
+    → So if user = { id, email, password, name, role }
+      then safeUser = { id, email, name, role }  (no password!)
+
+  WHY REMOVE THE PASSWORD?
+    → Security best practice. Even though this is a demo, we don't want
+      the password floating around in React state or localStorage.
+      The user's password should never be stored in the browser beyond
+      the login form.
+
+  Line: return safeUser;
+    → Returns the user object WITHOUT the password field.
+
+WHAT THIS FUNCTION RETURNS:
+  ┌─────────────────────────────────────────────────┐
+  │ INPUT                  │ OUTPUT                  │
+  │────────────────────────│─────────────────────────│
+  │ Correct credentials    │ { id, email, name,      │
+  │                        │   role } (no password)  │
+  │────────────────────────│─────────────────────────│
+  │ Wrong email or         │ null                    │
+  │ wrong password         │                         │
+  └─────────────────────────────────────────────────┘
+
+
+================================================================================
+5. FILE 3: AuthContext.jsx — THE BRAIN OF AUTHENTICATION
+================================================================================
+
+FILE PATH: src/context/AuthContext.jsx
+
+PURPOSE:
+  This is the MOST IMPORTANT auth file. It creates a React Context
+  that makes the logged-in user's data available to EVERY component
+  in the app without passing props down manually.
+
+  It provides three things to the entire app:
+    - user   → the currently logged-in user object (or null)
+    - login  → a function to log someone in
+    - logout → a function to log someone out
+
+FULL CODE WITH DETAILED EXPLANATION:
+
+  ┌──────────────────────────────────────────────────────────┐
+  │ import { createContext, useContext, useState, useEffect } │
+  │   from 'react';                                          │
+  │ import { authenticateUser }                               │
+  │   from '../services/authService';                        │
+  └──────────────────────────────────────────────────────────┘
+
+  IMPORTS:
+    - createContext  → React function to create a Context object
+    - useContext     → React hook to READ from a Context
+    - useState       → React hook to create state variables
+    - useEffect      → React hook to run side effects (like saving to localStorage)
+    - authenticateUser → Our credential checker from authService.js
+
+  ┌──────────────────────────────────────────────────────────┐
+  │ const AuthContext = createContext(null);                  │
+  └──────────────────────────────────────────────────────────┘
+
+  WHAT IS createContext(null)?
+    - Creates a "Context" — think of it as a global container.
+    - The "null" is the default value (used if no Provider is found).
+    - This Context will hold our auth data (user, login, logout).
+    - By itself, this line does nothing visible. It just creates
+      the container. We fill it in the Provider below.
+
+  ┌──────────────────────────────────────────────────────────┐
+  │ export function AuthProvider({ children }) {             │
+  └──────────────────────────────────────────────────────────┘
+
+  WHAT IS AuthProvider?
+    - It's a React component that WRAPS other components.
+    - "children" is a special React prop — it represents whatever
+      components are placed INSIDE <AuthProvider>...</AuthProvider>.
+    - In App.jsx, we wrap the ENTIRE app inside <AuthProvider>,
+      so every component becomes a "child" and gets access to auth.
+
+  ┌──────────────────────────────────────────────────────────┐
+  │ const [user, setUser] = useState(() => {                 │
+  │   const stored = localStorage.getItem('queueless_user'); │
+  │   return stored ? JSON.parse(stored) : null;             │
+  │ });                                                      │
+  └──────────────────────────────────────────────────────────┘
+
+  WHAT IS useState(() => { ... })?
+    - useState creates a state variable called "user".
+    - Normally you do: useState(null) or useState("hello").
+    - But here we pass a FUNCTION instead of a value.
+    - This is called "LAZY INITIALIZATION".
+
+  WHY LAZY INITIALIZATION?
+    - The function runs ONLY ONCE — when the component first mounts.
+    - If we wrote: useState(localStorage.getItem(...)), it would
+      call localStorage on EVERY render (wasteful).
+    - With a function, React calls it only on the first render.
+
+  WHAT DOES THE FUNCTION DO?
+    1. Checks localStorage for a key called 'queueless_user'.
+    2. If it exists → parses the JSON string back into an object → uses
+       that as the initial state. This means: if you refresh the page,
+       you stay logged in!
+    3. If it doesn't exist → returns null (no one is logged in).
+
+  WHAT IS localStorage?
+    - It's a browser API that stores key-value pairs permanently.
+    - Data persists even when you close the browser.
+    - We use it so the login "survives" page refreshes.
+    - It stores STRINGS only, so we use JSON.stringify() to save
+      and JSON.parse() to read.
+
+  ┌──────────────────────────────────────────────────────────┐
+  │ useEffect(() => {                                        │
+  │   if (user) {                                            │
+  │     localStorage.setItem('queueless_user',               │
+  │       JSON.stringify(user));                              │
+  │   } else {                                               │
+  │     localStorage.removeItem('queueless_user');            │
+  │   }                                                      │
+  │ }, [user]);                                              │
+  └──────────────────────────────────────────────────────────┘
+
+  WHAT IS useEffect?
+    - It runs code AFTER the component renders.
+    - The [user] at the end is the "dependency array" — it means
+      "run this effect only when 'user' changes".
+
+  WHAT DOES THIS EFFECT DO?
+    - When user is NOT null (someone just logged in):
+        → Saves the user object to localStorage as a JSON string.
+    - When user IS null (someone just logged out):
+        → Removes the key from localStorage entirely.
+
+  THIS CREATES A TWO-WAY SYNC:
+    Login  → setUser(userData) → user changes → useEffect fires → saves to localStorage
+    Logout → setUser(null) → user changes → useEffect fires → removes from localStorage
+    Refresh → useState reads from localStorage → restores the session
+
+  ┌──────────────────────────────────────────────────────────┐
+  │ function login(email, password) {                        │
+  │   const found = authenticateUser(email, password);       │
+  │   if (found) {                                           │
+  │     setUser(found);                                      │
+  │     return { success: true, user: found };               │
+  │   }                                                      │
+  │   return { success: false,                               │
+  │     message: 'Invalid email or password' };              │
+  │ }                                                        │
+  └──────────────────────────────────────────────────────────┘
+
+  THE LOGIN FUNCTION:
+    1. Calls authenticateUser() from authService.js with the
+       email and password the user typed.
+    2. If credentials match (found is not null):
+       - Calls setUser(found) → updates React state → triggers
+         re-render of every component using useAuth()
+       - Returns { success: true, user: found } so the caller
+         (LandingPage) knows login worked and can redirect.
+    3. If credentials don't match (found is null):
+       - Returns { success: false, message: '...' } so the caller
+         can show an error message to the user.
+
+  NOTE: This function does NOT navigate. It only updates state and
+  returns a result. The LandingPage component handles the navigation.
+
+  ┌──────────────────────────────────────────────────────────┐
+  │ function logout() {                                      │
+  │   setUser(null);                                         │
+  │ }                                                        │
+  └──────────────────────────────────────────────────────────┘
+
+  THE LOGOUT FUNCTION:
+    - Simply sets user to null.
+    - This triggers:
+      1. The useEffect runs → removes from localStorage
+      2. Every component using useAuth() re-renders
+      3. Route guards detect user is null → redirect to login
+
+  ┌──────────────────────────────────────────────────────────┐
+  │ return (                                                 │
+  │   <AuthContext.Provider value={{ user, login, logout }}> │
+  │     {children}                                           │
+  │   </AuthContext.Provider>                                │
+  │ );                                                       │
+  └──────────────────────────────────────────────────────────┘
+
+  THE PROVIDER:
+    - <AuthContext.Provider> is a special React component.
+    - "value" is what gets shared with every child component.
+    - We share: { user, login, logout }
+    - {children} renders whatever components are wrapped inside.
+
+  ┌──────────────────────────────────────────────────────────┐
+  │ export function useAuth() {                              │
+  │   const ctx = useContext(AuthContext);                    │
+  │   if (!ctx) throw new Error(                             │
+  │     'useAuth must be used within AuthProvider');          │
+  │   return ctx;                                            │
+  │ }                                                        │
+  └──────────────────────────────────────────────────────────┘
+
+  THE useAuth() CUSTOM HOOK:
+    - This is a convenience function.
+    - Instead of writing useContext(AuthContext) everywhere,
+      components just call useAuth().
+    - It returns { user, login, logout }.
+    - The error check ensures you don't accidentally use this
+      hook in a component that's not wrapped by AuthProvider.
+
+  WHO USES useAuth()?
+    - LandingPage.jsx     → calls login()
+    - Navbar.jsx           → calls logout(), reads user.name
+    - ProtectedRoute.jsx   → reads user to check if logged in
+    - AdminRoute.jsx       → reads user and user.role
+    - UserDashboard.jsx    → reads user.name to display welcome
+    - StaffDashboard.jsx   → (indirectly, through Navbar)
+
+
+================================================================================
+6. FILE 4: ProtectedRoute.jsx — GUARD FOR LOGGED-IN USERS
+================================================================================
+
+FILE PATH: src/routes/ProtectedRoute.jsx
+
+PURPOSE:
+  Wraps a page component. If the user is NOT logged in, it redirects
+  them to the login page ("/"). If they ARE logged in, it shows the
+  page normally. Used for the /user route.
+
+FULL CODE:
+  ┌──────────────────────────────────────────────────────────┐
+  │ import { Navigate } from 'react-router-dom';             │
+  │ import { useAuth } from '../context/AuthContext';        │
+  │                                                          │
+  │ export default function ProtectedRoute({ children }) {   │
+  │   const { user } = useAuth();                            │
+  │   if (!user) return <Navigate to="/" replace />;         │
+  │   return children;                                       │
+  │ }                                                        │
+  └──────────────────────────────────────────────────────────┘
+
+LINE-BY-LINE:
+
+  "import { Navigate } from 'react-router-dom'"
+    → Navigate is a React Router component that REDIRECTS the browser
+      to a different URL when it renders.
+
+  "const { user } = useAuth()"
+    → Gets the current user from AuthContext.
+    → If no one is logged in, user will be null.
+
+  "if (!user) return <Navigate to="/" replace />"
+    → "!user" is true when user is null (not logged in).
+    → <Navigate to="/" /> tells React Router: "go to the login page".
+    → "replace" means the current URL (/user) is REPLACED in browser
+       history, not added. So pressing the Back button won't bring
+       them back to the protected page.
+
+  "return children"
+    → If user IS logged in, just render whatever is inside.
+    → In App.jsx, children = <UserDashboard />.
+
+DECISION TABLE:
+  ┌───────────────────────┬──────────────────────────┐
+  │ user value            │ What happens             │
+  │───────────────────────│──────────────────────────│
+  │ null (not logged in)  │ Redirect to "/"          │
+  │ { role: 'customer' }  │ Show the page ✓          │
+  │ { role: 'admin' }     │ Show the page ✓          │
+  └───────────────────────┴──────────────────────────┘
+
+  Note: ProtectedRoute allows BOTH admin and customer through.
+  It only blocks unauthenticated visitors.
+
+
+================================================================================
+7. FILE 5: AdminRoute.jsx — GUARD FOR ADMIN-ONLY PAGES
+================================================================================
+
+FILE PATH: src/routes/AdminRoute.jsx
+
+PURPOSE:
+  A stricter guard than ProtectedRoute. It checks TWO things:
+    1. Is the user logged in?
+    2. Is the user's role "admin"?
+  If either check fails, it redirects them away.
+
+FULL CODE:
+  ┌──────────────────────────────────────────────────────────┐
+  │ import { Navigate } from 'react-router-dom';             │
+  │ import { useAuth } from '../context/AuthContext';        │
+  │                                                          │
+  │ export default function AdminRoute({ children }) {       │
+  │   const { user } = useAuth();                            │
+  │   if (!user) return <Navigate to="/" replace />;         │
+  │   if (user.role !== 'admin')                             │
+  │     return <Navigate to="/user" replace />;              │
+  │   return children;                                       │
+  │ }                                                        │
+  └──────────────────────────────────────────────────────────┘
+
+LINE-BY-LINE:
+
+  "if (!user) return <Navigate to="/" replace />"
+    → First check: not logged in at all → go to login page.
+
+  "if (user.role !== 'admin') return <Navigate to="/user" replace />"
+    → Second check: logged in but NOT an admin → go to user dashboard.
+    → This prevents a customer from typing /admin in the URL bar
+      and accessing the staff dashboard.
+
+  "return children"
+    → Passed both checks → show the admin page.
+
+DECISION TABLE:
+  ┌───────────────────────┬──────────────────────────┐
+  │ user value            │ What happens             │
+  │───────────────────────│──────────────────────────│
+  │ null                  │ Redirect to "/"          │
+  │ { role: 'customer' }  │ Redirect to "/user"      │
+  │ { role: 'admin' }     │ Show the page ✓          │
+  └───────────────────────┴──────────────────────────┘
+
+WHY TWO DIFFERENT REDIRECTS?
+  - If not logged in → go to login page (they need to log in first).
+  - If customer → go to their dashboard (they don't belong on admin page,
+    but they shouldn't be logged out either).
+
+
+================================================================================
+8. FILE 6: App.jsx — WHERE ROUTING IS DEFINED
+================================================================================
+
+FILE PATH: src/App.jsx
+
+PURPOSE:
+  This is the ROOT component. It sets up:
+    1. React Router (BrowserRouter)
+    2. The AuthProvider (wraps everything)
+    3. The QueueProvider (wraps everything)
+    4. The Navbar (shown on all pages except landing)
+    5. All route definitions
+
+FULL CODE:
+  ┌──────────────────────────────────────────────────────────┐
+  │ import { BrowserRouter, Routes, Route }                  │
+  │   from 'react-router-dom';                               │
+  │ import { AuthProvider } from './context/AuthContext';     │
+  │ import { QueueProvider } from './context/QueueContext';   │
+  │ import ProtectedRoute from './routes/ProtectedRoute';    │
+  │ import AdminRoute from './routes/AdminRoute';            │
+  │ import Navbar from './components/Navbar';                │
+  │ import LandingPage from './pages/LandingPage';           │
+  │ import UserDashboard from './pages/UserDashboard';       │
+  │ import StaffDashboard from './pages/StaffDashboard';     │
+  │                                                          │
+  │ export default function App() {                          │
+  │   return (                                               │
+  │     <BrowserRouter>                                      │
+  │       <AuthProvider>                                     │
+  │         <QueueProvider>                                  │
+  │           <Navbar />                                     │
+  │           <Routes>                                       │
+  │             <Route path="/"                              │
+  │               element={<LandingPage />} />               │
+  │                                                          │
+  │             <Route path="/user"                          │
+  │               element={                                  │
+  │                 <ProtectedRoute>                         │
+  │                   <UserDashboard />                      │
+  │                 </ProtectedRoute>                        │
+  │               } />                                       │
+  │                                                          │
+  │             <Route path="/admin"                         │
+  │               element={                                  │
+  │                 <AdminRoute>                             │
+  │                   <StaffDashboard />                     │
+  │                 </AdminRoute>                            │
+  │               } />                                       │
+  │           </Routes>                                      │
+  │         </QueueProvider>                                 │
+  │       </AuthProvider>                                    │
+  │     </BrowserRouter>                                     │
+  │   );                                                     │
+  │ }                                                        │
+  └──────────────────────────────────────────────────────────┘
+
+THE NESTING ORDER MATTERS:
+  ┌─────────────────────────────────────────────────────────────┐
+  │ BrowserRouter        ← Must be outermost (React Router)     │
+  │  └─ AuthProvider     ← Auth state available everywhere      │
+  │      └─ QueueProvider← Queue state available everywhere     │
+  │          ├─ Navbar   ← Always present                       │
+  │          └─ Routes   ← Picks the right page for the URL     │
+  └─────────────────────────────────────────────────────────────┘
+
+  WHY THIS ORDER?
+  - BrowserRouter must wrap everything because useNavigate(),
+    <Navigate/>, and <Route> only work inside it.
+  - AuthProvider is OUTSIDE QueueProvider because auth state is
+    needed everywhere (including the Navbar and route guards).
+  - QueueProvider needs to be inside AuthProvider because queue
+    operations might need to know who the user is.
+
+THE THREE ROUTES:
+  ┌──────────┬───────────────────┬─────────────────────────────┐
+  │ URL      │ Guard             │ Page Shown                  │
+  │──────────│───────────────────│─────────────────────────────│
+  │ /        │ None (public)     │ LandingPage (login form)    │
+  │ /user    │ ProtectedRoute    │ UserDashboard               │
+  │ /admin   │ AdminRoute        │ StaffDashboard              │
+  └──────────┴───────────────────┴─────────────────────────────┘
+
+HOW ROUTE GUARDS WORK IN THE JSX:
+  <Route path="/user" element={
+    <ProtectedRoute>         ← Guard renders first
+      <UserDashboard />      ← This is the "children" prop
+    </ProtectedRoute>
+  } />
+
+  When React Router matches "/user":
+    1. It renders the "element" → which is <ProtectedRoute>
+    2. ProtectedRoute checks: is user logged in?
+    3. If YES → it renders {children} → which is <UserDashboard />
+    4. If NO → it renders <Navigate to="/" /> → redirect to login
+
+
+================================================================================
+9. FILE 7: LandingPage.jsx — THE LOGIN SCREEN (AUTH LOGIC)
+================================================================================
+
+FILE PATH: src/pages/LandingPage.jsx
+
+NOTE: This file has both UI (styling) and auth logic. Here I explain
+only the AUTH AND ROUTING logic — the parts relevant to you.
+
+AUTH-RELATED CODE EXPLAINED:
+
+  ┌──────────────────────────────────────────────────────────┐
+  │ const { user, login } = useAuth();                       │
+  │ const navigate = useNavigate();                          │
+  └──────────────────────────────────────────────────────────┘
+
+  - useAuth() → gets the current user and the login function
+    from AuthContext.
+  - useNavigate() → React Router hook that gives us a function
+    to programmatically change the URL (navigate to another page).
+
+  ┌──────────────────────────────────────────────────────────┐
+  │ // If already logged in, redirect                        │
+  │ if (user) {                                              │
+  │   navigate(user.role === 'admin' ? '/admin' : '/user',   │
+  │     { replace: true });                                  │
+  │   return null;                                           │
+  │ }                                                        │
+  └──────────────────────────────────────────────────────────┘
+
+  AUTO-REDIRECT:
+    - This runs every time the component renders.
+    - If "user" is not null (someone is already logged in):
+      - If their role is 'admin' → navigate to /admin
+      - If their role is 'customer' → navigate to /user
+    - "return null" → don't render anything (page is about to change).
+    - This prevents a logged-in user from seeing the login page.
+
+  ┌──────────────────────────────────────────────────────────┐
+  │ async function handleSubmit(e) {                         │
+  │   e.preventDefault();                                    │
+  │   setError('');                                          │
+  │   setIsLoading(true);                                    │
+  │                                                          │
+  │   await new Promise((r) => setTimeout(r, 400));          │
+  │                                                          │
+  │   const result = login(email, password);                 │
+  │   setIsLoading(false);                                   │
+  │                                                          │
+  │   if (result.success) {                                  │
+  │     navigate(result.user.role === 'admin'                │
+  │       ? '/admin' : '/user', { replace: true });          │
+  │   } else {                                               │
+  │     setError(result.message);                            │
+  │   }                                                      │
+  │ }                                                        │
+  └──────────────────────────────────────────────────────────┘
+
+  FORM SUBMIT HANDLER — STEP BY STEP:
+    1. e.preventDefault() → stops the browser from reloading the page
+       (default form behavior).
+    2. Clears any previous error message.
+    3. Sets loading state to true (shows spinner on button).
+    4. Waits 400ms → this is a FAKE delay to make the login feel
+       realistic. Without it, login happens instantly which looks
+       unnatural.
+    5. Calls login(email, password) from AuthContext.
+    6. Turns off loading spinner.
+    7. If login succeeded:
+       - Navigates to /admin or /user based on role.
+       - { replace: true } replaces the login page in history
+         so pressing Back won't take them back to login.
+    8. If login failed:
+       - Sets the error message which displays in red on the form.
+
+  ┌──────────────────────────────────────────────────────────┐
+  │ function quickLogin(role) {                              │
+  │   if (role === 'admin') {                                │
+  │     setEmail('admin@queueless.com');                     │
+  │     setPassword('admin123');                             │
+  │   } else {                                               │
+  │     setEmail('user@queueless.com');                      │
+  │     setPassword('user123');                              │
+  │   }                                                      │
+  │ }                                                        │
+  └──────────────────────────────────────────────────────────┘
+
+  QUICK LOGIN:
+    - This does NOT submit the form.
+    - It only FILLS IN the email and password fields.
+    - The user still needs to click "Sign In" to actually log in.
+    - This is a demo convenience feature.
+
+
+================================================================================
+10. FILE 8: Navbar.jsx — THE LOGOUT BUTTON
+================================================================================
+
+FILE PATH: src/components/Navbar.jsx
+
+AUTH LOGIC IN NAVBAR:
+
+  ┌──────────────────────────────────────────────────────────┐
+  │ const { user, logout } = useAuth();                      │
+  │ const navigate = useNavigate();                          │
+  │                                                          │
+  │ function handleLogout() {                                │
+  │   logout();           // sets user to null in Context     │
+  │   navigate('/');      // go back to login page            │
+  │ }                                                        │
+  └──────────────────────────────────────────────────────────┘
+
+  WHAT HAPPENS WHEN LOGOUT IS CLICKED:
+    1. logout() → sets user to null in AuthContext
+    2. useEffect in AuthContext fires → removes user from localStorage
+    3. navigate('/') → takes the browser to the login page
+    4. If somehow they try to go to /user or /admin, the route
+       guards will catch them (user is null now) and redirect
+       back to login.
+
+  ┌──────────────────────────────────────────────────────────┐
+  │ if (location.pathname === '/') return null;              │
+  └──────────────────────────────────────────────────────────┘
+
+  SELF-HIDING:
+    - On the landing/login page ("/"), the Navbar doesn't render at all.
+    - This is because the landing page has its own clean design and
+      doesn't need a navbar.
+
+  DISPLAYING USER INFO:
+    - {user.name} displays the logged-in user's name (e.g. "Admin Staff")
+    - {user.name.charAt(0).toUpperCase()} shows the first letter as an avatar
+    - {user.role} displays "admin" or "customer" under the name
+
+
+================================================================================
+11. COMPLETE LOGIN FLOW — WHAT HAPPENS STEP BY STEP
+================================================================================
+
+  User types admin@queueless.com and admin123, clicks Sign In:
+
+  STEP 1: LandingPage.handleSubmit() runs
+          │
+  STEP 2: ├── e.preventDefault() stops page reload
+          ├── setIsLoading(true) shows spinner
+          ├── waits 400ms (fake delay)
+          │
+  STEP 3: ├── Calls login("admin@queueless.com", "admin123")
+          │     inside AuthContext
+          │
+  STEP 4: │   ├── login() calls authenticateUser("admin@queueless.com", "admin123")
+          │   │     inside authService.js
+          │   │
+  STEP 5: │   │   ├── USERS.find() searches the array
+          │   │   ├── Finds: { id:'admin-1', email:'admin@queueless.com',
+          │   │   │            password:'admin123', name:'Admin Staff', role:'admin' }
+          │   │   ├── Strips password → returns { id, email, name, role }
+          │   │   └── Returns the safe user object
+          │   │
+  STEP 6: │   ├── setUser(found) → React state updates → user is now the admin object
+          │   ├── useEffect fires → saves to localStorage
+          │   └── Returns { success: true, user: { role: 'admin', ... } }
+          │
+  STEP 7: ├── result.success is true
+          ├── result.user.role is 'admin'
+          ├── navigate('/admin', { replace: true })
+          │
+  STEP 8: React Router changes URL to /admin
+          │
+  STEP 9: <Route path="/admin"> matches
+          ├── Renders <AdminRoute>
+          │     ├── useAuth() → user is not null ✓
+          │     ├── user.role === 'admin' ✓
+          │     └── Returns {children} → <StaffDashboard />
+          │
+  STEP 10: Staff Dashboard renders. User sees the admin panel.
+
+
+================================================================================
+12. COMPLETE LOGOUT FLOW — WHAT HAPPENS STEP BY STEP
+================================================================================
+
+  User clicks the "Logout" button in the Navbar:
+
+  STEP 1: Navbar.handleLogout() runs
+          │
+  STEP 2: ├── Calls logout() from AuthContext
+          │   ├── setUser(null) → React state updates → user is now null
+          │   └── useEffect fires → localStorage.removeItem('queueless_user')
+          │
+  STEP 3: ├── navigate('/') → URL changes to "/"
+          │
+  STEP 4: React Router matches "/"
+          ├── Renders <LandingPage />
+          ├── user is null → no auto-redirect
+          └── Shows the login form
+
+  If user tries to manually go to /admin or /user:
+          │
+  STEP 5: Route guard checks user → user is null
+          └── <Navigate to="/" /> → sent back to login
+
+
+================================================================================
+13. COMPLETE ROUTE PROTECTION FLOW
+================================================================================
+
+  SCENARIO A: Unauthenticated user types /admin in the URL bar
+  ┌────────────────────────────────────────────────────────┐
+  │ URL: /admin                                            │
+  │ → Route matches /admin                                 │
+  │ → Renders <AdminRoute>                                 │
+  │ → useAuth() → user is null                             │
+  │ → !user is true                                        │
+  │ → Returns <Navigate to="/" />                          │
+  │ → Redirected to login page                             │
+  └────────────────────────────────────────────────────────┘
+
+  SCENARIO B: Customer types /admin in the URL bar
+  ┌────────────────────────────────────────────────────────┐
+  │ URL: /admin                                            │
+  │ → Route matches /admin                                 │
+  │ → Renders <AdminRoute>                                 │
+  │ → useAuth() → user = { role: 'customer' }              │
+  │ → !user is false (user exists) ← passes first check   │
+  │ → user.role !== 'admin' is true ← fails second check  │
+  │ → Returns <Navigate to="/user" />                      │
+  │ → Redirected to customer dashboard                     │
+  └────────────────────────────────────────────────────────┘
+
+  SCENARIO C: Admin types /user in the URL bar
+  ┌────────────────────────────────────────────────────────┐
+  │ URL: /user                                             │
+  │ → Route matches /user                                  │
+  │ → Renders <ProtectedRoute>                             │
+  │ → useAuth() → user = { role: 'admin' }                 │
+  │ → !user is false (user exists) ← passes the check     │
+  │ → Returns {children} → <UserDashboard />               │
+  │ → Admin CAN access the user dashboard                  │
+  │                                                        │
+  │ NOTE: This is by design. ProtectedRoute only checks    │
+  │ if someone is logged in, not their role.               │
+  └────────────────────────────────────────────────────────┘
+
+
+================================================================================
+14. REACT CONCEPTS USED (EXPLAINED SIMPLY)
+================================================================================
+
+  CONCEPT: React Context API
+  WHAT: A way to share data across many components without passing
+        props through every level. Like a "global variable" but
+        properly managed by React.
+  WHERE: AuthContext.jsx creates it. useAuth() reads it.
+  WHY: Without Context, we'd have to pass "user" as a prop from
+       App → Navbar → every component. With Context, any component
+       anywhere can call useAuth() and get the user directly.
+
+  CONCEPT: Custom Hook (useAuth)
+  WHAT: A regular JavaScript function that starts with "use" and
+        calls other React hooks inside it.
+  WHERE: Defined in AuthContext.jsx, used everywhere.
+  WHY: Shorthand. Instead of writing useContext(AuthContext) every
+       time, we just write useAuth(). Also adds error checking.
+
+  CONCEPT: useState with Lazy Initialization
+  WHAT: Passing a function to useState(() => ...) instead of a value.
+  WHERE: AuthContext.jsx line 7.
+  WHY: The function runs only once. If we wrote useState(localStorage...)
+       directly, localStorage would be read on every render.
+
+  CONCEPT: useEffect with Dependency Array
+  WHAT: Runs a function AFTER render, but ONLY when specified values change.
+  WHERE: AuthContext.jsx line 13 → [user] dependency.
+  WHY: We want to save to localStorage every time user changes, but
+       not on every render.
+
+  CONCEPT: Wrapper Components (Higher-Order Pattern)
+  WHAT: A component that wraps another component and adds behavior.
+  WHERE: ProtectedRoute and AdminRoute wrap page components.
+  WHY: Clean separation. The page doesn't need to know about auth
+       checks. The guard handles it independently.
+
+  CONCEPT: Programmatic Navigation
+  WHAT: Changing the URL from code (not from a link click).
+  WHERE: navigate('/admin') in LandingPage and Navbar.
+  WHY: After login succeeds, we need to redirect the user automatically.
+       We can't use a <Link> because the decision happens in code.
+
+  CONCEPT: Conditional Rendering
+  WHAT: Showing different UI based on a condition.
+  WHERE: Navbar shows/hides based on pathname. Error message shows
+         only when error is not empty.
+  WHY: Different states need different UI.
+
+
+================================================================================
+15. LIKELY CROSS QUESTIONS & ANSWERS
+================================================================================
+
+Q: Why did you use Context API instead of Redux?
+A: Context API is built into React — no extra library needed. For a
+   simple project with just user state, Context is sufficient. Redux
+   would be overkill here. Redux is better when you have complex state
+   with many actions and need middleware or devtools.
+
+Q: Why not use JWT tokens?
+A: This is a frontend-only demo with no backend. JWT requires a server
+   to sign and verify tokens. We simulate authentication with hardcoded
+   credentials and localStorage. In production, yes, we would use JWT.
+
+Q: Is storing user data in localStorage secure?
+A: For a demo, it's fine. In production, sensitive data should NOT be
+   in localStorage because it's vulnerable to XSS attacks. You'd use
+   httpOnly cookies set by the server instead.
+
+Q: What happens if someone clears localStorage?
+A: They get logged out. The useState initializer will find nothing in
+   localStorage and set user to null.
+
+Q: Why do you strip the password from the user object?
+A: Security best practice. Even though passwords are hardcoded here,
+   in a real app you'd never want passwords in React state or
+   localStorage. We follow the pattern to demonstrate awareness.
+
+Q: What if someone manually edits localStorage to change their role?
+A: In this demo, it would work — they could change role to "admin"
+   and access the admin page. In a real app, the server would verify
+   the user's role on every API request, so client-side tampering
+   wouldn't help. This is a known limitation of frontend-only auth.
+
+Q: Why use "replace: true" in Navigate?
+A: So the protected URL doesn't stay in browser history. Without
+   replace, pressing Back would take them to the protected URL again,
+   which would redirect them again — creating a confusing loop.
+
+Q: Can you add a new role, like "manager"?
+A: Yes. Steps:
+   1. Add a user with role: 'manager' in mockData.js
+   2. Create a ManagerRoute.jsx (similar to AdminRoute)
+   3. Add a new <Route> in App.jsx with the ManagerRoute guard
+   4. Update LandingPage redirect logic to handle the new role
+
+Q: What is BrowserRouter?
+A: It's the React Router component that enables client-side routing.
+   It listens to URL changes in the browser and renders the matching
+   Route. It uses the HTML5 History API (pushState/popState).
+
+Q: What's the difference between BrowserRouter and HashRouter?
+A: BrowserRouter uses clean URLs: /admin, /user.
+   HashRouter uses hash URLs: /#/admin, /#/user.
+   BrowserRouter needs server configuration for production (to serve
+   index.html for all paths). HashRouter works without server config
+   but looks less clean.
+
+Q: Why is AuthProvider inside BrowserRouter?
+A: Because AuthContext doesn't need routing. But LandingPage (inside
+   AuthProvider) uses useNavigate() which requires BrowserRouter.
+   So BrowserRouter must be the outermost wrapper.
+
+Q: How would you add a "Remember Me" feature?
+A: We already have it! localStorage persists across browser sessions.
+   If you wanted a "Don't Remember Me" option, you'd use sessionStorage
+   instead (it clears when the tab closes). You'd add a checkbox on the
+   login form and choose the storage accordingly.
+
+Q: How would you add a signup feature?
+A: Add a signup function that pushes a new user object into the USERS
+   array (or a separate state). In a real app, this would be a POST
+   request to a backend API. You'd need form validation for the new
+   user's email, password, and name.
+
+
+================================================================================
+16. COMMON MODIFICATIONS YOU MIGHT BE ASKED TO MAKE
+================================================================================
+
+MODIFICATION: Add a third user
+  FILE: src/services/mockData.js
+  ACTION: Add a new object to the USERS array with unique id and email.
+
+MODIFICATION: Add a "manager" role with its own dashboard
+  FILES: mockData.js, routes/ (new ManagerRoute.jsx), App.jsx,
+         pages/ (new ManagerDashboard.jsx)
+  STEPS:
+    1. Add user with role: 'manager' in mockData.js
+    2. Create ManagerRoute.jsx that checks role === 'manager'
+    3. Create ManagerDashboard.jsx page
+    4. Add <Route path="/manager"> in App.jsx
+    5. Update redirect logic in LandingPage.jsx
+
+MODIFICATION: Add a signup page
+  FILES: LandingPage.jsx (or new SignupPage.jsx), mockData.js
+  STEPS:
+    1. Create form with name, email, password, role fields
+    2. On submit, add the new user to a state-based users list
+    3. Since there's no backend, the user would exist only until refresh
+    4. Optionally store in localStorage to persist
+
+MODIFICATION: Use sessionStorage instead of localStorage
+  FILE: src/context/AuthContext.jsx
+  ACTION: Replace every "localStorage" with "sessionStorage".
+  EFFECT: User gets logged out when they close the browser tab.
+
+MODIFICATION: Add a 404 Not Found page
+  FILES: pages/ (new NotFoundPage.jsx), App.jsx
+  STEPS:
+    1. Create NotFoundPage.jsx with a "Page not found" message
+    2. Add <Route path="*" element={<NotFoundPage />} /> at the end
+       of your Routes. The "*" matches any URL not already defined.
+
+MODIFICATION: Add password visibility toggle
+  FILE: src/pages/LandingPage.jsx
+  STEPS:
+    1. Add a state: const [showPassword, setShowPassword] = useState(false)
+    2. Change input type from "password" to: type={showPassword ? 'text' : 'password'}
+    3. Add a button/icon next to the input that toggles setShowPassword
+
+================================================================================
+END OF DOCUMENT
+================================================================================
